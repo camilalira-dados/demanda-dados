@@ -6,28 +6,28 @@
 <title>Painel de Controle — Esteira de Produção</title>
 <style>
   :root{
-    --bg: #f2f2f2;
+    --bg: #eef1f5;
     --surface: #ffffff;
-    --surface-alt: #f7f6f2;
-    --border: #dfe4da;
-    --border-strong: #c7d1c0;
-    --text: #2f5848;
-    --text-muted: #567566;
-    --text-faint: #7c9386;
-    --navy: #2f5848;
-    --navy-light: #1f3a35;
-    --accent: #f39019;
-    --accent-light: #fdf2e7;
-    --success: #2f5848;
-    --success-bg: #e8f1ed;
-    --warning: #f39019;
-    --warning-bg: #fef2e6;
-    --danger: #bb4a4a;
-    --danger-bg: #fbeceb;
-    --info: #168980;
-    --info-bg: #e6f4f2;
-    --neutral: #7fc1aa;
-    --neutral-bg: #eef7f2;
+    --surface-alt: #f7f8fa;
+    --border: #e2e5ea;
+    --border-strong: #d1d5db;
+    --text: #1a2233;
+    --text-muted: #667085;
+    --text-faint: #98a2b3;
+    --navy: #16213e;
+    --navy-light: #1f3057;
+    --accent: #2757c7;
+    --accent-light: #eaf0fd;
+    --success: #16794f;
+    --success-bg: #e5f5ee;
+    --warning: #b4650a;
+    --warning-bg: #fdf1e0;
+    --danger: #b3241f;
+    --danger-bg: #fbe9e8;
+    --info: #0f6e6a;
+    --info-bg: #e4f4f3;
+    --neutral: #51586b;
+    --neutral-bg: #eceef1;
     --radius-sm: 6px;
     --radius: 10px;
     --radius-lg: 14px;
@@ -423,6 +423,7 @@
   </div>
   <div class="topbar-actions">
     <button type="button" class="btn btn-light" id="btnImportData" title="Importar uma planilha Excel ou CSV para o painel">📂 Importar planilha</button>
+    <button type="button" class="btn btn-light" id="btnExportData" title="Exportar os dados atuais para um arquivo CSV">⬇️ Exportar CSV</button>
     <button type="button" class="btn btn-light" id="btnSaveData" title="Salvar alterações localmente">💾 Salvar alterações</button>
     <button type="button" class="btn btn-danger-outline" id="btnClearData" title="Limpar todos os dados e reiniciar o painel">🧹 Limpar dados</button>
     <button type="button" class="btn btn-primary" id="btnNova">+ Nova demanda</button>
@@ -694,7 +695,8 @@
   var STORAGE_KEYS = {
     demandas: 'esteira_demandas_v1',
     updates: 'esteira_updates_v1',
-    seq: 'esteira_seq_v1'
+    seq: 'esteira_seq_v1',
+    importMeta: 'esteira_import_meta_v1'
   };
 
   var STATUS_OPTIONS = ['Não iniciado','Em progresso','Aguardando retorno','Entregue','Entregue com atraso','Concluído','Cancelado'];
@@ -785,106 +787,61 @@
     }
     return text;
   }
-  function parseCsv(text){
-    var rows = [];
-    var row = [];
-    var value = '';
-    var inQuotes = false;
-
-    for(var i = 0; i < text.length; i++){
-      var ch = text[i];
-      if(ch === '"'){
-        if(inQuotes && text[i+1] === '"'){
-          value += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if(ch === ',' && !inQuotes){
-        row.push(value);
-        value = '';
-      } else if((ch === '\n' || ch === '\r') && !inQuotes){
-        if(ch === '\r' && text[i+1] === '\n') i++;
-        row.push(value);
-        if(row.some(function(cell){ return (cell || '').trim() !== ''; })) rows.push(row);
-        row = [];
-        value = '';
-      } else {
-        value += ch;
-      }
+  function saveAll(){
+    localStorage.setItem(STORAGE_KEYS.demandas, JSON.stringify(demandas));
+    localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify(updates));
+  }
+  function exportCurrentDataToCsv(){
+    if(!demandas.length){
+      showToast('Não há dados para exportar.');
+      return;
     }
 
-    if(value.length || row.length){
-      row.push(value);
-      if(row.some(function(cell){ return (cell || '').trim() !== ''; })) rows.push(row);
-    }
+    var rows = [[
+      'id','nome','descricao','solicitante','dataEntrada','prazoOriginal','prazoAtualizado','nivelRisco','descricaoRisco','status','ultimaAtualizacao','ultimoComentario','ultimoProximoPasso','ultimoBloqueios'
+    ]];
 
-    return rows;
-  }
-  function normalizeHeader(value){
-    return String(value || '').trim().toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '');
-  }
-  function normalizeStatus(value){
-    var status = String(value || '').trim().toLowerCase();
-    if(!status) return 'Não iniciado';
-    if(status.indexOf('conclu') !== -1) return 'Concluído';
-    if(status.indexOf('cancel') !== -1) return 'Cancelado';
-    if(status.indexOf('entregue com atraso') !== -1 || status.indexOf('atras') !== -1) return 'Entregue com atraso';
-    if(status.indexOf('entregue') !== -1) return 'Entregue';
-    if(status.indexOf('aguard') !== -1) return 'Aguardando retorno';
-    if(status.indexOf('progres') !== -1) return 'Em progresso';
-    return 'Não iniciado';
-  }
-  function normalizeRisco(value){
-    var risco = String(value || '').trim().toLowerCase();
-    if(!risco) return 'Nenhum';
-    if(risco.indexOf('crit') !== -1) return 'Crítico';
-    if(risco.indexOf('alto') !== -1) return 'Alto';
-    if(risco.indexOf('medio') !== -1 || risco.indexOf('médio') !== -1 || risco.indexOf('med') !== -1) return 'Médio';
-    if(risco.indexOf('baixo') !== -1) return 'Baixo';
-    return 'Nenhum';
-  }
-  function persistUpdateHistoryToExcel(){
-    if(!updates || !updates.length){ return; }
-    var rows = [
-      ['id_atualizacao','demanda_relacionada','data_atualizacao','responsavel','comentario','proximo_passo','bloqueios','status_anterior','status_novo','tipo']
-    ];
-    updates.forEach(function(u){
-      var demanda = demandas.filter(function(d){ return d.id===u.demandaId; })[0];
+    demandas.forEach(function(d){
+      var latestUpdate = updates.filter(function(u){ return u.demandaId === d.id; }).sort(function(a,b){
+        return (a.data || '').localeCompare(b.data || '');
+      }).slice(-1)[0];
+
       rows.push([
-        u.id || '',
-        demanda ? demanda.nome : (u.demandaId || ''),
-        u.data || '',
-        u.responsavel || '',
-        u.comentario || '',
-        u.proximoPasso || '',
-        u.bloqueios || '',
-        u.statusAnterior || '',
-        u.statusNovo || '',
-        u.tipo || 'andamento'
+        d.id || '',
+        d.nome || '',
+        d.descricao || '',
+        d.solicitante || '',
+        d.dataEntrada || '',
+        d.prazoOriginal || '',
+        d.prazoAtualizado || '',
+        d.nivelRisco || '',
+        d.descricaoRisco || '',
+        d.status || '',
+        d.ultimaAtualizacao || '',
+        latestUpdate ? (latestUpdate.comentario || '') : '',
+        latestUpdate ? (latestUpdate.proximoPasso || '') : '',
+        latestUpdate ? (latestUpdate.bloqueios || '') : ''
       ]);
     });
+
     var csv = rows.map(function(row){ return row.map(csvEscape).join(','); }).join('\n');
     var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     var url = window.URL.createObjectURL(blob);
     var link = document.createElement('a');
     link.href = url;
-    link.download = 'historico-atualizacoes.csv';
+    link.download = 'dados-esteira.csv';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
-  }
-  function saveAll(){
-    localStorage.setItem(STORAGE_KEYS.demandas, JSON.stringify(demandas));
-    localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify(updates));
-    persistUpdateHistoryToExcel();
+    showToast('Dados exportados para CSV.');
   }
   function clearAllData(){
     demandas = [];
     updates = [];
     localStorage.removeItem(STORAGE_KEYS.demandas);
     localStorage.removeItem(STORAGE_KEYS.updates);
+    localStorage.removeItem(STORAGE_KEYS.importMeta);
     localStorage.setItem(STORAGE_KEYS.seq, '0');
     saveAll();
     renderAll();
@@ -912,6 +869,61 @@
       statusAnterior: update.statusAnterior || '',
       statusNovo: update.statusNovo || ''
     }, update);
+  }
+  function normalizeImportedDate(value){
+    if(!value && value !== 0) return '';
+    if(value instanceof Date) return isoFromDate(value);
+    if(typeof value === 'number'){
+      var date = new Date((value - 25569) * 86400 * 1000);
+      return isoFromDate(date);
+    }
+    var text = String(value).trim();
+    if(!text) return '';
+    if(/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0,10);
+    if(/^\d{4}\/\d{2}\/\d{2}/.test(text)) return text.replace(/\//g,'-').slice(0,10);
+    if(/^\d{2}\/\d{2}\/\d{4}/.test(text)){
+      var parts = text.split('/');
+      return parts[2]+'-'+parts[1]+'-'+parts[0];
+    }
+    return text;
+  }
+  function getImportValue(record, keys){
+    for(var i = 0; i < keys.length; i++){
+      var key = keys[i];
+      var value = record[key];
+      if(value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
+    }
+    return '';
+  }
+  function applyImportedFields(existingDemand, record){
+    var nomeTexto = getImportValue(record, ['nomedademanda','demanda','atividade','nome','titulo','título']);
+    if(nomeTexto){ existingDemand.nome = nomeTexto; }
+
+    var descricao = getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']);
+    if(descricao){ existingDemand.descricao = descricao; }
+
+    var solicitante = getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']);
+    if(solicitante){ existingDemand.solicitante = solicitante; }
+
+    var dataEntrada = normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat']));
+    if(dataEntrada){ existingDemand.dataEntrada = dataEntrada; }
+
+    var prazoOriginal = normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo']));
+    if(prazoOriginal){ existingDemand.prazoOriginal = prazoOriginal; }
+
+    var prazoAtualizado = normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual']));
+    if(prazoAtualizado){ existingDemand.prazoAtualizado = prazoAtualizado; }
+
+    var nivelRisco = getImportValue(record, ['nivelderisco','risco','nivelrisco']);
+    if(nivelRisco){ existingDemand.nivelRisco = normalizeRisco(nivelRisco); }
+
+    var descricaoRisco = getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']);
+    if(descricaoRisco){ existingDemand.descricaoRisco = descricaoRisco; }
+
+    var status = getImportValue(record, ['status','situacao','situao']);
+    if(status){ existingDemand.status = normalizeStatus(status); }
+
+    existingDemand.ultimaAtualizacao = todayISO();
   }
   function loadAll(){
     var storedDemandas = localStorage.getItem(STORAGE_KEYS.demandas);
@@ -1245,39 +1257,39 @@
     var comentario = document.getElementById('upComentario').value.trim();
     var proximoPasso = document.getElementById('upProximoPasso').value.trim();
     var bloqueios = document.getElementById('upBloqueios').value.trim();
-    var statusSelecionado = document.getElementById('upStatus').value;  
+    var statusSelecionado = document.getElementById('upStatus').value;
 
-    if(!demandaId){ showToast('Cadastre uma demanda antes de registrar atualizações.'); return; }  
-    if(!comentario){ return; }  
+    if(!demandaId){ showToast('Cadastre uma demanda antes de registrar atualizações.'); return; }
+    if(!comentario){ return; }
 
-    var demandaAtual = demandas.filter(function(d){ return d.id===demandaId; })[0];  
-    var statusAnterior = demandaAtual ? demandaAtual.status : '';  
-    var statusAlterado = Boolean(demandaAtual && statusSelecionado && statusSelecionado !== statusAnterior);  
+    var demandaAtual = demandas.filter(function(d){ return d.id===demandaId; })[0];
+    var statusAnterior = demandaAtual ? demandaAtual.status : '';
+    var statusAlterado = Boolean(demandaAtual && statusSelecionado && statusSelecionado !== statusAnterior);
 
-    demandas = demandas.map(function(d){  
-      if(d.id!==demandaId) return d;  
-      var atual = d.ultimaAtualizacao || d.dataEntrada;  
-      var proximoStatus = statusAlterado ? statusSelecionado : d.status;  
-      return Object.assign({}, d, {  
-        status: proximoStatus,  
-        ultimaAtualizacao: (data > atual ? data : atual)  
-      });  
-    });  
+    demandas = demandas.map(function(d){
+      if(d.id!==demandaId) return d;
+      var atual = d.ultimaAtualizacao || d.dataEntrada;
+      var proximoStatus = statusAlterado ? statusSelecionado : d.status;
+      return Object.assign({}, d, {
+        status: proximoStatus,
+        ultimaAtualizacao: (data > atual ? data : atual)
+      });
+    });
 
-    updates.push({  
-      id:nextUpdateId(), data:data, demandaId:demandaId,  
-      comentario:comentario, proximoPasso:proximoPasso, bloqueios:bloqueios,  
-      responsavel:'',  
-      tipo: statusAlterado ? 'status' : 'andamento',  
-      statusAnterior: statusAnterior,  
-      statusNovo: statusAlterado ? statusSelecionado : ''  
-    });  
+    updates.push({
+      id:nextUpdateId(), data:data, demandaId:demandaId,
+      comentario:comentario, proximoPasso:proximoPasso, bloqueios:bloqueios,
+      responsavel:'',
+      tipo: statusAlterado ? 'status' : 'andamento',
+      statusAnterior: statusAnterior,
+      statusNovo: statusAlterado ? statusSelecionado : ''
+    });
 
-    saveAll();  
-    renderAll();  
-    document.getElementById('updateForm').reset();  
-    document.getElementById('upData').value = todayISO();  
-    showToast(statusAlterado ? 'Atualização registrada e status atualizado.' : 'Atualização registrada.');  
+    saveAll();
+    renderAll();
+    document.getElementById('updateForm').reset();
+    document.getElementById('upData').value = todayISO();
+    showToast(statusAlterado ? 'Atualização registrada e status atualizado.' : 'Atualização registrada.');
   }
 
   function importBackup(file){
@@ -1302,66 +1314,64 @@
         return;
       }
 
-      if(rows.length < 2){ showToast('A planilha não possui conteúdo suficiente para importar.'); return; }
+      if(rows.length < 2){
+        showToast('A planilha não possui conteúdo suficiente para importar.');
+        return;
+      }
 
       var headers = rows[0].map(normalizeHeader);
       var imported = 0;
 
       rows.slice(1).forEach(function(row){
-        if(!row.some(function(cell){ return (cell || '').trim() !== ''; })) return;
+        if(!row.some(function(cell){ return (cell || '').toString().trim() !== ''; })) return;
 
         var record = {};
         headers.forEach(function(header, index){
           record[header] = row[index] || '';
         });
 
-        var nome = [record.nomedademanda, record.demanda, record.atividade, record.nome, record.titulo, record.título]
-          .find(function(value){ return value && String(value).trim(); });
-        if(!nome) return;
+        var nomeTexto = getImportValue(record, ['nomedademanda','demanda','atividade','nome','titulo','título']);
+        if(!nomeTexto) return;
 
-        var nomeTexto = String(nome).trim();
-        var existing = demandas.some(function(d){ return d.nome.trim().toLowerCase() === nomeTexto.toLowerCase(); });
-        if(existing) return;
+        nomeTexto = String(nomeTexto).trim();
+        var existing = demandas.filter(function(d){ return d.nome && d.nome.trim().toLowerCase() === nomeTexto.toLowerCase(); })[0];
 
-        var descricao = [record.descricao, record.descrio, record.observacoes, record.observao, record.detalhes]
-          .find(function(value){ return value && String(value).trim(); });
-        var solicitante = [record.solicitante, record.pessoaquesolicitou, record.pessoaqsolicitou, record.responsavel]
-          .find(function(value){ return value && String(value).trim(); });
-        var dataEntrada = [record.dataentrada, record.datadeentrada, record.entrada, record.createdat]
-          .find(function(value){ return value && String(value).trim(); });
-        var prazoOriginal = [record.prazooriginal, record.prazoestipulado, record.prazo, record.dataprazo]
-          .find(function(value){ return value && String(value).trim(); });
-        var prazoAtualizado = [record.prazoatualizado, record.prazoatual]
-          .find(function(value){ return value && String(value).trim(); });
-        var nivelRisco = [record.nivelderisco, record.risco, record.nivelrisco]
-          .find(function(value){ return value && String(value).trim(); });
-        var descricaoRisco = [record.descriaodorisco, record.descriorisco, record.motivorisco]
-          .find(function(value){ return value && String(value).trim(); });
-        var status = [record.status, record.situacao, record.situao]
-          .find(function(value){ return value && String(value).trim(); });
+        if(existing){
+          applyImportedFields(existing, record);
+          imported++;
+          return;
+        }
 
-        var payload = {
+        var descricao = getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']);
+        var solicitante = getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']);
+        var dataEntrada = normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat']));
+        var prazoOriginal = normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo']));
+        var prazoAtualizado = normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual']));
+        var nivelRisco = getImportValue(record, ['nivelderisco','risco','nivelrisco']);
+        var descricaoRisco = getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']);
+        var status = getImportValue(record, ['status','situacao','situao']);
+
+        demandas.push({
           id: nextId(),
           nome: nomeTexto,
-          descricao: descricao ? String(descricao).trim() : '',
-          solicitante: solicitante ? String(solicitante).trim() : '',
-          dataEntrada: dataEntrada ? String(dataEntrada).trim() : todayISO(),
-          prazoOriginal: prazoOriginal ? String(prazoOriginal).trim() : addDays(todayISO(), 7),
-          prazoAtualizado: prazoAtualizado ? String(prazoAtualizado).trim() : '',
+          descricao: descricao || '',
+          solicitante: solicitante || '',
+          dataEntrada: dataEntrada || todayISO(),
+          prazoOriginal: prazoOriginal || addDays(todayISO(), 7),
+          prazoAtualizado: prazoAtualizado || '',
           nivelRisco: normalizeRisco(nivelRisco),
-          descricaoRisco: descricaoRisco ? String(descricaoRisco).trim() : '',
+          descricaoRisco: descricaoRisco || '',
           status: normalizeStatus(status),
           ultimaAtualizacao: todayISO()
-        };
-
-        demandas.push(payload);
+        });
         imported++;
       });
 
       if(imported){
+        localStorage.setItem(STORAGE_KEYS.importMeta, JSON.stringify({fileName:file.name, importedAt:todayISO()}));
         saveAll();
         renderAll();
-        showToast(imported+' demanda(s) importadas da planilha.');
+        showToast(imported+' demanda(s) carregadas da planilha.');
       } else {
         showToast('Nenhuma nova demanda foi importada.');
       }
@@ -1413,6 +1423,7 @@
       if(file){ importBackup(file); }
       e.target.value = '';
     });
+    document.getElementById('btnExportData').addEventListener('click', exportCurrentDataToCsv);
     document.getElementById('modalClose').addEventListener('click', closeModal);
     document.getElementById('modalCancel').addEventListener('click', closeModal);
     document.getElementById('modalSave').addEventListener('click', saveDemandaFromForm);
