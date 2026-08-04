@@ -422,11 +422,15 @@
     </div>
   </div>
   <div class="topbar-actions">
+    <button type="button" class="btn btn-light" id="btnImportData" title="Importar uma planilha Excel ou CSV para o painel">📂 Importar planilha</button>
+    <button type="button" class="btn btn-light" id="btnExportData" title="Exportar os dados atuais para um arquivo CSV">⬇️ Exportar CSV</button>
     <button type="button" class="btn btn-light" id="btnSaveData" title="Salvar alterações localmente">💾 Salvar alterações</button>
     <button type="button" class="btn btn-danger-outline" id="btnClearData" title="Limpar todos os dados e reiniciar o painel">🧹 Limpar dados</button>
     <button type="button" class="btn btn-primary" id="btnNova">+ Nova demanda</button>
   </div>
 </header>
+
+<input type="file" id="importFile" accept=".csv,.txt,.xlsx,.xls" hidden>
 
 <main class="container">
 
@@ -680,6 +684,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.1/dist/xlsx.full.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -690,7 +695,8 @@
   var STORAGE_KEYS = {
     demandas: 'esteira_demandas_v1',
     updates: 'esteira_updates_v1',
-    seq: 'esteira_seq_v1'
+    seq: 'esteira_seq_v1',
+    importMeta: 'esteira_import_meta_v1'
   };
 
   var STATUS_OPTIONS = ['Não iniciado','Em progresso','Aguardando retorno','Entregue','Entregue com atraso','Concluído','Cancelado'];
@@ -781,47 +787,61 @@
     }
     return text;
   }
-  function persistUpdateHistoryToExcel(){
-    if(!updates || !updates.length){ return; }
-    var rows = [
-      ['id_atualizacao','demanda_relacionada','data_atualizacao','responsavel','comentario','proximo_passo','bloqueios','status_anterior','status_novo','tipo']
-    ];
-    updates.forEach(function(u){
-      var demanda = demandas.filter(function(d){ return d.id===u.demandaId; })[0];
+  function saveAll(){
+    localStorage.setItem(STORAGE_KEYS.demandas, JSON.stringify(demandas));
+    localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify(updates));
+  }
+  function exportCurrentDataToCsv(){
+    if(!demandas.length){
+      showToast('Não há dados para exportar.');
+      return;
+    }
+
+    var rows = [[
+      'id','nome','descricao','solicitante','dataEntrada','prazoOriginal','prazoAtualizado','nivelRisco','descricaoRisco','status','ultimaAtualizacao','ultimoComentario','ultimoProximoPasso','ultimoBloqueios'
+    ]];
+
+    demandas.forEach(function(d){
+      var latestUpdate = updates.filter(function(u){ return u.demandaId === d.id; }).sort(function(a,b){
+        return (a.data || '').localeCompare(b.data || '');
+      }).slice(-1)[0];
+
       rows.push([
-        u.id || '',
-        demanda ? demanda.nome : (u.demandaId || ''),
-        u.data || '',
-        u.responsavel || '',
-        u.comentario || '',
-        u.proximoPasso || '',
-        u.bloqueios || '',
-        u.statusAnterior || '',
-        u.statusNovo || '',
-        u.tipo || 'andamento'
+        d.id || '',
+        d.nome || '',
+        d.descricao || '',
+        d.solicitante || '',
+        d.dataEntrada || '',
+        d.prazoOriginal || '',
+        d.prazoAtualizado || '',
+        d.nivelRisco || '',
+        d.descricaoRisco || '',
+        d.status || '',
+        d.ultimaAtualizacao || '',
+        latestUpdate ? (latestUpdate.comentario || '') : '',
+        latestUpdate ? (latestUpdate.proximoPasso || '') : '',
+        latestUpdate ? (latestUpdate.bloqueios || '') : ''
       ]);
     });
+
     var csv = rows.map(function(row){ return row.map(csvEscape).join(','); }).join('\n');
     var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     var url = window.URL.createObjectURL(blob);
     var link = document.createElement('a');
     link.href = url;
-    link.download = 'historico-atualizacoes.csv';
+    link.download = 'dados-esteira.csv';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
-  }
-  function saveAll(){
-    localStorage.setItem(STORAGE_KEYS.demandas, JSON.stringify(demandas));
-    localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify(updates));
-    persistUpdateHistoryToExcel();
+    showToast('Dados exportados para CSV.');
   }
   function clearAllData(){
     demandas = [];
     updates = [];
     localStorage.removeItem(STORAGE_KEYS.demandas);
     localStorage.removeItem(STORAGE_KEYS.updates);
+    localStorage.removeItem(STORAGE_KEYS.importMeta);
     localStorage.setItem(STORAGE_KEYS.seq, '0');
     saveAll();
     renderAll();
@@ -849,6 +869,61 @@
       statusAnterior: update.statusAnterior || '',
       statusNovo: update.statusNovo || ''
     }, update);
+  }
+  function normalizeImportedDate(value){
+    if(!value && value !== 0) return '';
+    if(value instanceof Date) return isoFromDate(value);
+    if(typeof value === 'number'){
+      var date = new Date((value - 25569) * 86400 * 1000);
+      return isoFromDate(date);
+    }
+    var text = String(value).trim();
+    if(!text) return '';
+    if(/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0,10);
+    if(/^\d{4}\/\d{2}\/\d{2}/.test(text)) return text.replace(/\//g,'-').slice(0,10);
+    if(/^\d{2}\/\d{2}\/\d{4}/.test(text)){
+      var parts = text.split('/');
+      return parts[2]+'-'+parts[1]+'-'+parts[0];
+    }
+    return text;
+  }
+  function getImportValue(record, keys){
+    for(var i = 0; i < keys.length; i++){
+      var key = keys[i];
+      var value = record[key];
+      if(value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
+    }
+    return '';
+  }
+  function applyImportedFields(existingDemand, record){
+    var nomeTexto = getImportValue(record, ['nomedademanda','demanda','atividade','nome','titulo','título']);
+    if(nomeTexto){ existingDemand.nome = nomeTexto; }
+
+    var descricao = getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']);
+    if(descricao){ existingDemand.descricao = descricao; }
+
+    var solicitante = getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']);
+    if(solicitante){ existingDemand.solicitante = solicitante; }
+
+    var dataEntrada = normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat']));
+    if(dataEntrada){ existingDemand.dataEntrada = dataEntrada; }
+
+    var prazoOriginal = normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo']));
+    if(prazoOriginal){ existingDemand.prazoOriginal = prazoOriginal; }
+
+    var prazoAtualizado = normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual']));
+    if(prazoAtualizado){ existingDemand.prazoAtualizado = prazoAtualizado; }
+
+    var nivelRisco = getImportValue(record, ['nivelderisco','risco','nivelrisco']);
+    if(nivelRisco){ existingDemand.nivelRisco = normalizeRisco(nivelRisco); }
+
+    var descricaoRisco = getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']);
+    if(descricaoRisco){ existingDemand.descricaoRisco = descricaoRisco; }
+
+    var status = getImportValue(record, ['status','situacao','situao']);
+    if(status){ existingDemand.status = normalizeStatus(status); }
+
+    existingDemand.ultimaAtualizacao = todayISO();
   }
   function loadAll(){
     var storedDemandas = localStorage.getItem(STORAGE_KEYS.demandas);
@@ -1182,43 +1257,131 @@
     var comentario = document.getElementById('upComentario').value.trim();
     var proximoPasso = document.getElementById('upProximoPasso').value.trim();
     var bloqueios = document.getElementById('upBloqueios').value.trim();
-    var statusSelecionado = document.getElementById('upStatus').value;  
+    var statusSelecionado = document.getElementById('upStatus').value;
 
-    if(!demandaId){ showToast('Cadastre uma demanda antes de registrar atualizações.'); return; }  
-    if(!comentario){ return; }  
+    if(!demandaId){ showToast('Cadastre uma demanda antes de registrar atualizações.'); return; }
+    if(!comentario){ return; }
 
-    var demandaAtual = demandas.filter(function(d){ return d.id===demandaId; })[0];  
-    var statusAnterior = demandaAtual ? demandaAtual.status : '';  
-    var statusAlterado = Boolean(demandaAtual && statusSelecionado && statusSelecionado !== statusAnterior);  
+    var demandaAtual = demandas.filter(function(d){ return d.id===demandaId; })[0];
+    var statusAnterior = demandaAtual ? demandaAtual.status : '';
+    var statusAlterado = Boolean(demandaAtual && statusSelecionado && statusSelecionado !== statusAnterior);
 
-    demandas = demandas.map(function(d){  
-      if(d.id!==demandaId) return d;  
-      var atual = d.ultimaAtualizacao || d.dataEntrada;  
-      var proximoStatus = statusAlterado ? statusSelecionado : d.status;  
-      return Object.assign({}, d, {  
-        status: proximoStatus,  
-        ultimaAtualizacao: (data > atual ? data : atual)  
-      });  
-    });  
+    demandas = demandas.map(function(d){
+      if(d.id!==demandaId) return d;
+      var atual = d.ultimaAtualizacao || d.dataEntrada;
+      var proximoStatus = statusAlterado ? statusSelecionado : d.status;
+      return Object.assign({}, d, {
+        status: proximoStatus,
+        ultimaAtualizacao: (data > atual ? data : atual)
+      });
+    });
 
-    updates.push({  
-      id:nextUpdateId(), data:data, demandaId:demandaId,  
-      comentario:comentario, proximoPasso:proximoPasso, bloqueios:bloqueios,  
-      responsavel:'',  
-      tipo: statusAlterado ? 'status' : 'andamento',  
-      statusAnterior: statusAnterior,  
-      statusNovo: statusAlterado ? statusSelecionado : ''  
-    });  
+    updates.push({
+      id:nextUpdateId(), data:data, demandaId:demandaId,
+      comentario:comentario, proximoPasso:proximoPasso, bloqueios:bloqueios,
+      responsavel:'',
+      tipo: statusAlterado ? 'status' : 'andamento',
+      statusAnterior: statusAnterior,
+      statusNovo: statusAlterado ? statusSelecionado : ''
+    });
 
-    saveAll();  
-    renderAll();  
-    document.getElementById('updateForm').reset();  
-    document.getElementById('upData').value = todayISO();  
-    showToast(statusAlterado ? 'Atualização registrada e status atualizado.' : 'Atualização registrada.');  
+    saveAll();
+    renderAll();
+    document.getElementById('updateForm').reset();
+    document.getElementById('upData').value = todayISO();
+    showToast(statusAlterado ? 'Atualização registrada e status atualizado.' : 'Atualização registrada.');
   }
 
   function importBackup(file){
-    // função mantida apenas para compatibilidade interna; não é usada na interface atual.
+    if(!file) return;
+    var reader = new FileReader();
+    var isExcel = /\.xlsx?$/i.test(file.name);
+
+    reader.onload = function(e){
+      var rows = [];
+      try{
+        if(isExcel){
+          if(!window.XLSX){ throw new Error('XLSX not loaded'); }
+          var data = new Uint8Array(e.target.result);
+          var workbook = window.XLSX.read(data, {type:'array'});
+          var sheetName = workbook.SheetNames[0];
+          rows = window.XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1, defval:'', raw:false});
+        } else {
+          rows = parseCsv(e.target.result || '');
+        }
+      }catch(err){
+        showToast('Não foi possível ler a planilha selecionada.');
+        return;
+      }
+
+      if(rows.length < 2){
+        showToast('A planilha não possui conteúdo suficiente para importar.');
+        return;
+      }
+
+      var headers = rows[0].map(normalizeHeader);
+      var imported = 0;
+
+      rows.slice(1).forEach(function(row){
+        if(!row.some(function(cell){ return (cell || '').toString().trim() !== ''; })) return;
+
+        var record = {};
+        headers.forEach(function(header, index){
+          record[header] = row[index] || '';
+        });
+
+        var nomeTexto = getImportValue(record, ['nomedademanda','demanda','atividade','nome','titulo','título']);
+        if(!nomeTexto) return;
+
+        nomeTexto = String(nomeTexto).trim();
+        var existing = demandas.filter(function(d){ return d.nome && d.nome.trim().toLowerCase() === nomeTexto.toLowerCase(); })[0];
+
+        if(existing){
+          applyImportedFields(existing, record);
+          imported++;
+          return;
+        }
+
+        var descricao = getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']);
+        var solicitante = getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']);
+        var dataEntrada = normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat']));
+        var prazoOriginal = normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo']));
+        var prazoAtualizado = normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual']));
+        var nivelRisco = getImportValue(record, ['nivelderisco','risco','nivelrisco']);
+        var descricaoRisco = getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']);
+        var status = getImportValue(record, ['status','situacao','situao']);
+
+        demandas.push({
+          id: nextId(),
+          nome: nomeTexto,
+          descricao: descricao || '',
+          solicitante: solicitante || '',
+          dataEntrada: dataEntrada || todayISO(),
+          prazoOriginal: prazoOriginal || addDays(todayISO(), 7),
+          prazoAtualizado: prazoAtualizado || '',
+          nivelRisco: normalizeRisco(nivelRisco),
+          descricaoRisco: descricaoRisco || '',
+          status: normalizeStatus(status),
+          ultimaAtualizacao: todayISO()
+        });
+        imported++;
+      });
+
+      if(imported){
+        localStorage.setItem(STORAGE_KEYS.importMeta, JSON.stringify({fileName:file.name, importedAt:todayISO()}));
+        saveAll();
+        renderAll();
+        showToast(imported+' demanda(s) carregadas da planilha.');
+      } else {
+        showToast('Nenhuma nova demanda foi importada.');
+      }
+    };
+    reader.onerror = function(){ showToast('Não foi possível ler a planilha.'); };
+    if(isExcel){
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.readAsText(file, 'utf-8');
+    }
   }
 
   /* ============================================================
@@ -1254,6 +1417,13 @@
   ============================================================ */
   function attachEvents(){
     document.getElementById('btnNova').addEventListener('click', function(){ openModal(null); });
+    document.getElementById('btnImportData').addEventListener('click', function(){ document.getElementById('importFile').click(); });
+    document.getElementById('importFile').addEventListener('change', function(e){
+      var file = e.target.files && e.target.files[0];
+      if(file){ importBackup(file); }
+      e.target.value = '';
+    });
+    document.getElementById('btnExportData').addEventListener('click', exportCurrentDataToCsv);
     document.getElementById('modalClose').addEventListener('click', closeModal);
     document.getElementById('modalCancel').addEventListener('click', closeModal);
     document.getElementById('modalSave').addEventListener('click', saveDemandaFromForm);
