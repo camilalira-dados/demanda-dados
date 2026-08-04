@@ -153,10 +153,15 @@
   .kpi-card.accent-danger .kpi-value{color:var(--danger);}
   .kpi-card.accent-warning .kpi-value{color:var(--warning);}
   .kpi-card.accent-success .kpi-value{color:var(--success);}
-  .kpi-bar-track{height:6px;border-radius:4px;background:var(--neutral-bg);margin-top:12px;overflow:hidden;}
-  .kpi-bar-fill{height:100%;background:var(--success);border-radius:4px;transition:width .3s;}
-
-  /* ---------- Panels ---------- */
+  .kpi-card.accent-info .kpi-value{color:var(--info);}  
+  .kpi-bar-track{height:6px;border-radius:4px;background:var(--neutral-bg);margin-top:12px;overflow:hidden;}  
+  .kpi-bar-fill{height:100%;background:var(--success);border-radius:4px;transition:width .3s;}  
+  .panel-summary{display:flex;flex-direction:column;gap:10px;}  
+  .panel-summary-item{padding:10px 0;border-top:1px solid var(--border);}  
+  .panel-summary-item:first-child{padding-top:0;border-top:none;}  
+  .panel-summary-label{font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;}  
+  .panel-summary-value{font-size:24px;font-weight:800;color:var(--navy);margin-top:4px;}  
+  .panel-summary-value.small{font-size:18px;color:var(--accent);}
   .panels-grid{
     display:grid;
     grid-template-columns:repeat(4,1fr);
@@ -205,8 +210,7 @@
   }
   .badge-nao-iniciado{background:var(--neutral-bg);color:var(--neutral);}
   .badge-em-progresso{background:var(--accent-light);color:var(--accent);}
-  .badge-entregue{background:var(--info-bg);color:var(--info);}
-  .badge-entregue-atraso{background:var(--warning-bg);color:var(--warning);}
+  .badge-aguardando-retorno{background:var(--warning-bg);color:var(--warning);}  
   .badge-concluido{background:var(--success-bg);color:var(--success);}
   .badge-cancelado{background:#f1f1f3;color:#8a8f98;text-decoration:line-through;}
 
@@ -277,7 +281,7 @@
   tbody tr:hover{background:#fafbfd;}
   .cell-name{font-weight:600;color:var(--text);max-width:230px;}
   .cell-name .desc{font-weight:400;color:var(--text-muted);font-size:12px;margin-top:2px;
-    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
   .cell-date{white-space:nowrap;}
   .cell-date .days-tag{display:block;font-size:11px;color:var(--text-faint);margin-top:2px;}
   .row-atraso{box-shadow:inset 3px 0 0 var(--danger);background:#fff9f8;}
@@ -439,8 +443,13 @@
         <div class="kpi-sub" id="kpiTotalSub">na esteira</div>
       </div>
       <div class="kpi-card accent-success">
-        <div class="kpi-label">Conclusão da esteira</div>
-        <div class="kpi-value"><span id="kpiConclusao">0</span><span style="font-size:16px;">%</span></div>
+        <div class="kpi-label">Demandas concluídas</div>
+        <div class="kpi-value" id="kpiConclusao">0</div>
+        <div class="kpi-sub">em estado concluído</div>
+      </div>
+      <div class="kpi-card accent-info">
+        <div class="kpi-label">Percentual de conclusão da esteira</div>
+        <div class="kpi-value"><span id="kpiPercentual">0</span><span style="font-size:16px;">%</span></div>
         <div class="kpi-bar-track"><div class="kpi-bar-fill" id="kpiConclusaoBar" style="width:0%;"></div></div>
       </div>
       <div class="kpi-card accent-danger">
@@ -459,7 +468,7 @@
   <section class="panels-section">
     <div class="panels-grid">
       <div class="panel-card">
-        <h3>Quantidade por status</h3>
+        <h3>Resumo da esteira</h3>
         <ul class="panel-list" id="panelStatus"></ul>
       </div>
       <div class="panel-card">
@@ -550,6 +559,19 @@
           <div class="field">
             <label for="upBloqueios">Bloqueios ou riscos</label>
             <textarea id="upBloqueios" placeholder="Existe algum impedimento?"></textarea>
+          </div>
+          <div class="field">
+            <label for="upStatus">Status da demanda</label>
+            <select id="upStatus">
+              <option value="">Manter status atual</option>
+              <option>Não iniciado</option>
+              <option>Em progresso</option>
+              <option>Aguardando retorno</option>
+              <option>Entregue</option>
+              <option>Entregue com atraso</option>
+              <option>Concluído</option>
+              <option>Cancelado</option>
+            </select>
           </div>
           <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">Registrar atualização</button>
         </form>
@@ -642,6 +664,7 @@
           <select id="fStatus" required>
             <option>Não iniciado</option>
             <option>Em progresso</option>
+            <option>Aguardando retorno</option>
             <option>Entregue</option>
             <option>Entregue com atraso</option>
             <option>Concluído</option>
@@ -670,7 +693,7 @@
     seq: 'esteira_seq_v1'
   };
 
-  var STATUS_OPTIONS = ['Não iniciado','Em progresso','Entregue','Entregue com atraso','Concluído','Cancelado'];
+  var STATUS_OPTIONS = ['Não iniciado','Em progresso','Aguardando retorno','Entregue','Entregue com atraso','Concluído','Cancelado'];
   var STATUS_FINAL = ['Concluído','Cancelado']; // não entram mais em contagem de "em aberto"
   var RISCO_OPTIONS = ['Nenhum','Baixo','Médio','Alto','Crítico'];
   var RISCO_ALTO = ['Alto','Crítico'];
@@ -680,6 +703,7 @@
   var STATUS_CLASS = {
     'Não iniciado':'badge-nao-iniciado',
     'Em progresso':'badge-em-progresso',
+    'Aguardando retorno':'badge-aguardando-retorno',
     'Entregue':'badge-entregue',
     'Entregue com atraso':'badge-entregue-atraso',
     'Concluído':'badge-concluido',
@@ -688,6 +712,7 @@
   var STATUS_DOT = {
     'Não iniciado':'#51586b',
     'Em progresso':'#2757c7',
+    'Aguardando retorno':'#b4650a',
     'Entregue':'#0f6e6a',
     'Entregue com atraso':'#b4650a',
     'Concluído':'#16794f',
@@ -749,9 +774,48 @@
   /* ============================================================
      PERSISTÊNCIA (LocalStorage)
   ============================================================ */
+  function csvEscape(value){
+    var text = value == null ? '' : String(value);
+    if(text.indexOf('"') !== -1 || text.indexOf(',') !== -1 || text.indexOf('\n') !== -1){
+      return '"' + text.replace(/"/g,'""') + '"';
+    }
+    return text;
+  }
+  function persistUpdateHistoryToExcel(){
+    if(!updates || !updates.length){ return; }
+    var rows = [
+      ['id_atualizacao','demanda_relacionada','data_atualizacao','responsavel','comentario','proximo_passo','bloqueios','status_anterior','status_novo','tipo']
+    ];
+    updates.forEach(function(u){
+      var demanda = demandas.filter(function(d){ return d.id===u.demandaId; })[0];
+      rows.push([
+        u.id || '',
+        demanda ? demanda.nome : (u.demandaId || ''),
+        u.data || '',
+        u.responsavel || '',
+        u.comentario || '',
+        u.proximoPasso || '',
+        u.bloqueios || '',
+        u.statusAnterior || '',
+        u.statusNovo || '',
+        u.tipo || 'andamento'
+      ]);
+    });
+    var csv = rows.map(function(row){ return row.map(csvEscape).join(','); }).join('\n');
+    var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    var url = window.URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'historico-atualizacoes.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  }
   function saveAll(){
     localStorage.setItem(STORAGE_KEYS.demandas, JSON.stringify(demandas));
     localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify(updates));
+    persistUpdateHistoryToExcel();
   }
   function clearAllData(){
     demandas = [];
@@ -771,14 +835,28 @@
   function nextUpdateId(){
     return 'UPD-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1000);
   }
-
+  function normalizeUpdateRecord(update){
+    if(!update || typeof update !== 'object') return update;
+    return Object.assign({
+      id: update.id || nextUpdateId(),
+      data: update.data || todayISO(),
+      demandaId: update.demandaId || '',
+      comentario: update.comentario || '',
+      proximoPasso: update.proximoPasso || '',
+      bloqueios: update.bloqueios || '',
+      responsavel: update.responsavel || '',
+      tipo: update.tipo || 'andamento',
+      statusAnterior: update.statusAnterior || '',
+      statusNovo: update.statusNovo || ''
+    }, update);
+  }
   function loadAll(){
     var storedDemandas = localStorage.getItem(STORAGE_KEYS.demandas);
     var storedUpdates = localStorage.getItem(STORAGE_KEYS.updates);
     if(storedDemandas || storedUpdates){
       try{
         if(storedDemandas){ demandas = JSON.parse(storedDemandas) || []; }
-        if(storedUpdates){ updates = JSON.parse(storedUpdates) || []; }
+        if(storedUpdates){ updates = (JSON.parse(storedUpdates) || []).map(normalizeUpdateRecord); }
         return;
       }catch(e){
         console.warn('Falha ao ler dados salvos, iniciando painel vazio.', e);
@@ -839,23 +917,23 @@
 
     document.getElementById('kpiTotal').textContent = total;
     document.getElementById('kpiTotalSub').textContent = total===1 ? '1 demanda cadastrada' : total+' demandas cadastradas';
-    document.getElementById('kpiConclusao').textContent = pctConclusao;
+    document.getElementById('kpiConclusao').textContent = concluidas;
+    document.getElementById('kpiPercentual').textContent = pctConclusao;
     document.getElementById('kpiConclusaoBar').style.width = pctConclusao+'%';
     document.getElementById('kpiAtrasadas').textContent = atrasadas.length;
     document.getElementById('kpiCriticas').textContent = criticas.length;
 
-    // painel: por status
-    var statusHtml = STATUS_OPTIONS.map(function(s){
-      var count = demandas.filter(function(d){return d.status===s;}).length;
-      var pct = total>0 ? Math.round((count/total)*100) : 0;
-      return '<li class="status-row">'+
-        '<span class="status-dot" style="background:'+STATUS_DOT[s]+';"></span>'+
-        '<span class="status-name">'+s+'</span>'+
-        '<span class="status-bar-track"><span class="status-bar-fill" style="width:'+pct+'%;background:'+STATUS_DOT[s]+';"></span></span>'+
-        '<span class="status-count">'+count+'</span>'+
-        '</li>';
-    }).join('');
-    document.getElementById('panelStatus').innerHTML = statusHtml;
+    // painel: resumo da esteira
+    document.getElementById('panelStatus').innerHTML = '<li class="panel-summary">'+
+      '<div class="panel-summary-item">'+
+        '<div class="panel-summary-label">Demandas concluídas</div>'+ 
+        '<div class="panel-summary-value">'+concluidas+'</div>'+ 
+      '</div>'+ 
+      '<div class="panel-summary-item">'+ 
+        '<div class="panel-summary-label">Percentual de conclusão da esteira</div>'+ 
+        '<div class="panel-summary-value small">'+pctConclusao+'%</div>'+ 
+      '</div>'+ 
+      '</li>';
 
     // painel: próximos prazos
     document.getElementById('pillProximos').textContent = proximos.length;
@@ -981,12 +1059,14 @@
       var nomeDemanda = demanda ? demanda.nome : '(demanda removida)';
       var bloqueiosHtml = u.bloqueios ? '<div class="meta-line block-warning">⚠ '+escapeHtml(u.bloqueios)+'</div>' : '';
       var proximoHtml = u.proximoPasso ? '<div class="meta-line"><b>Próximo passo:</b> '+escapeHtml(u.proximoPasso)+'</div>' : '';
+      var statusHtml = u.statusAnterior && u.statusNovo ? '<div class="meta-line"><b>Status:</b> '+escapeHtml(u.statusAnterior)+' → '+escapeHtml(u.statusNovo)+'</div>' : '';
+      var responsavelHtml = u.responsavel ? '<div class="meta-line"><b>Responsável:</b> '+escapeHtml(u.responsavel)+'</div>' : '';
       return '<div class="timeline-item">'+
         '<div class="timeline-dot-col"><span class="timeline-dot"></span><span class="timeline-line"></span></div>'+
         '<div class="timeline-body">'+
           '<div class="timeline-head"><span class="demanda-tag">'+escapeHtml(nomeDemanda)+'</span><span class="date-tag">'+formatBR(u.data)+'</span></div>'+
           '<div class="timeline-comment">'+escapeHtml(u.comentario)+'</div>'+
-          '<div class="timeline-meta">'+proximoHtml+bloqueiosHtml+'</div>'+
+          '<div class="timeline-meta">'+responsavelHtml+statusHtml+proximoHtml+bloqueiosHtml+'</div>'+
         '</div>'+
       '</div>';
     }).join('');
@@ -1102,33 +1182,39 @@
     var comentario = document.getElementById('upComentario').value.trim();
     var proximoPasso = document.getElementById('upProximoPasso').value.trim();
     var bloqueios = document.getElementById('upBloqueios').value.trim();
+    var statusSelecionado = document.getElementById('upStatus').value;  
 
-    if(!demandaId){ showToast('Cadastre uma demanda antes de registrar atualizações.'); return; }
-    if(!comentario){ return; }
+    if(!demandaId){ showToast('Cadastre uma demanda antes de registrar atualizações.'); return; }  
+    if(!comentario){ return; }  
 
-    updates.push({
-      id:nextUpdateId(), data:data, demandaId:demandaId,
-      comentario:comentario, proximoPasso:proximoPasso, bloqueios:bloqueios
-    });
+    var demandaAtual = demandas.filter(function(d){ return d.id===demandaId; })[0];  
+    var statusAnterior = demandaAtual ? demandaAtual.status : '';  
+    var statusAlterado = Boolean(demandaAtual && statusSelecionado && statusSelecionado !== statusAnterior);  
 
-    demandas = demandas.map(function(d){
-      if(d.id!==demandaId) return d;
-      var atual = d.ultimaAtualizacao || d.dataEntrada;
-      return Object.assign({}, d, { ultimaAtualizacao: (data > atual ? data : atual) });
-    });
+    demandas = demandas.map(function(d){  
+      if(d.id!==demandaId) return d;  
+      var atual = d.ultimaAtualizacao || d.dataEntrada;  
+      var proximoStatus = statusAlterado ? statusSelecionado : d.status;  
+      return Object.assign({}, d, {  
+        status: proximoStatus,  
+        ultimaAtualizacao: (data > atual ? data : atual)  
+      });  
+    });  
 
-    saveAll();
-    renderAll();
-    document.getElementById('updateForm').reset();
-    document.getElementById('upData').value = todayISO();
-    showToast('Atualização registrada.');
-  }
+    updates.push({  
+      id:nextUpdateId(), data:data, demandaId:demandaId,  
+      comentario:comentario, proximoPasso:proximoPasso, bloqueios:bloqueios,  
+      responsavel:'',  
+      tipo: statusAlterado ? 'status' : 'andamento',  
+      statusAnterior: statusAnterior,  
+      statusNovo: statusAlterado ? statusSelecionado : ''  
+    });  
 
-  /* ============================================================
-     EXPORTAR / IMPORTAR BACKUP
-  ============================================================ */
-  function exportBackup(){
-    // função mantida apenas para compatibilidade interna; não é usada na interface atual.
+    saveAll();  
+    renderAll();  
+    document.getElementById('updateForm').reset();  
+    document.getElementById('upData').value = todayISO();  
+    showToast(statusAlterado ? 'Atualização registrada e status atualizado.' : 'Atualização registrada.');  
   }
 
   function importBackup(file){
