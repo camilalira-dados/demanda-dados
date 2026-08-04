@@ -422,14 +422,14 @@
     </div>
   </div>
   <div class="topbar-actions">
-    <button type="button" class="btn btn-light" id="btnImportData" title="Importar demandas a partir de uma planilha">📥 Importar planilha</button>
+    <button type="button" class="btn btn-light" id="btnImportData" title="Abrir e importar uma planilha Excel ou CSV">📥 Abrir planilha</button>
     <button type="button" class="btn btn-light" id="btnSaveData" title="Salvar alterações localmente">💾 Salvar alterações</button>
     <button type="button" class="btn btn-danger-outline" id="btnClearData" title="Limpar todos os dados e reiniciar o painel">🧹 Limpar dados</button>
     <button type="button" class="btn btn-primary" id="btnNova">+ Nova demanda</button>
   </div>
 </header>
 
-<input type="file" id="importFile" accept=".csv,.txt" hidden>
+<input type="file" id="importFile" accept=".csv,.txt,.xlsx,.xls" hidden>
 
 <main class="container">
 
@@ -683,6 +683,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.1/dist/xlsx.full.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -1282,9 +1283,25 @@
   function importBackup(file){
     if(!file) return;
     var reader = new FileReader();
+    var isExcel = /\.xlsx?$/i.test(file.name);
+
     reader.onload = function(e){
-      var text = e.target.result || '';
-      var rows = parseCsv(text);
+      var rows = [];
+      try{
+        if(isExcel){
+          if(!window.XLSX){ throw new Error('XLSX not loaded'); }
+          var data = new Uint8Array(e.target.result);
+          var workbook = window.XLSX.read(data, {type:'array'});
+          var sheetName = workbook.SheetNames[0];
+          rows = window.XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1, defval:'', raw:false});
+        } else {
+          rows = parseCsv(e.target.result || '');
+        }
+      }catch(err){
+        showToast('Não foi possível ler a planilha selecionada.');
+        return;
+      }
+
       if(rows.length < 2){ showToast('A planilha não possui conteúdo suficiente para importar.'); return; }
 
       var headers = rows[0].map(normalizeHeader);
@@ -1337,10 +1354,6 @@
           ultimaAtualizacao: todayISO()
         };
 
-        if(payload.prazoAtualizado && payload.prazoAtualizado.indexOf('/') !== -1){
-          payload.prazoAtualizado = payload.prazoAtualizado;
-        }
-
         demandas.push(payload);
         imported++;
       });
@@ -1354,7 +1367,11 @@
       }
     };
     reader.onerror = function(){ showToast('Não foi possível ler a planilha.'); };
-    reader.readAsText(file, 'utf-8');
+    if(isExcel){
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.readAsText(file, 'utf-8');
+    }
   }
 
   /* ============================================================
