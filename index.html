@@ -6,28 +6,28 @@
 <title>Painel de Controle — Esteira de Produção</title>
 <style>
   :root{
-    --bg: #eef1f5;
+    --bg: #f2f2f2;
     --surface: #ffffff;
-    --surface-alt: #f7f8fa;
-    --border: #e2e5ea;
-    --border-strong: #d1d5db;
-    --text: #1a2233;
-    --text-muted: #667085;
-    --text-faint: #98a2b3;
-    --navy: #16213e;
-    --navy-light: #1f3057;
-    --accent: #2757c7;
-    --accent-light: #eaf0fd;
-    --success: #16794f;
-    --success-bg: #e5f5ee;
-    --warning: #b4650a;
-    --warning-bg: #fdf1e0;
-    --danger: #b3241f;
-    --danger-bg: #fbe9e8;
-    --info: #0f6e6a;
-    --info-bg: #e4f4f3;
-    --neutral: #51586b;
-    --neutral-bg: #eceef1;
+    --surface-alt: #f7f6f2;
+    --border: #dfe4da;
+    --border-strong: #c7d1c0;
+    --text: #2f5848;
+    --text-muted: #567566;
+    --text-faint: #7c9386;
+    --navy: #2f5848;
+    --navy-light: #1f3a35;
+    --accent: #f39019;
+    --accent-light: #fdf2e7;
+    --success: #2f5848;
+    --success-bg: #e8f1ed;
+    --warning: #f39019;
+    --warning-bg: #fef2e6;
+    --danger: #bb4a4a;
+    --danger-bg: #fbeceb;
+    --info: #168980;
+    --info-bg: #e6f4f2;
+    --neutral: #7fc1aa;
+    --neutral-bg: #eef7f2;
     --radius-sm: 6px;
     --radius: 10px;
     --radius-lg: 14px;
@@ -422,11 +422,14 @@
     </div>
   </div>
   <div class="topbar-actions">
+    <button type="button" class="btn btn-light" id="btnImportData" title="Importar demandas a partir de uma planilha">📥 Importar planilha</button>
     <button type="button" class="btn btn-light" id="btnSaveData" title="Salvar alterações localmente">💾 Salvar alterações</button>
     <button type="button" class="btn btn-danger-outline" id="btnClearData" title="Limpar todos os dados e reiniciar o painel">🧹 Limpar dados</button>
     <button type="button" class="btn btn-primary" id="btnNova">+ Nova demanda</button>
   </div>
 </header>
+
+<input type="file" id="importFile" accept=".csv,.txt" hidden>
 
 <main class="container">
 
@@ -780,6 +783,65 @@
       return '"' + text.replace(/"/g,'""') + '"';
     }
     return text;
+  }
+  function parseCsv(text){
+    var rows = [];
+    var row = [];
+    var value = '';
+    var inQuotes = false;
+
+    for(var i = 0; i < text.length; i++){
+      var ch = text[i];
+      if(ch === '"'){
+        if(inQuotes && text[i+1] === '"'){
+          value += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if(ch === ',' && !inQuotes){
+        row.push(value);
+        value = '';
+      } else if((ch === '\n' || ch === '\r') && !inQuotes){
+        if(ch === '\r' && text[i+1] === '\n') i++;
+        row.push(value);
+        if(row.some(function(cell){ return (cell || '').trim() !== ''; })) rows.push(row);
+        row = [];
+        value = '';
+      } else {
+        value += ch;
+      }
+    }
+
+    if(value.length || row.length){
+      row.push(value);
+      if(row.some(function(cell){ return (cell || '').trim() !== ''; })) rows.push(row);
+    }
+
+    return rows;
+  }
+  function normalizeHeader(value){
+    return String(value || '').trim().toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '');
+  }
+  function normalizeStatus(value){
+    var status = String(value || '').trim().toLowerCase();
+    if(!status) return 'Não iniciado';
+    if(status.indexOf('conclu') !== -1) return 'Concluído';
+    if(status.indexOf('cancel') !== -1) return 'Cancelado';
+    if(status.indexOf('entregue com atraso') !== -1 || status.indexOf('atras') !== -1) return 'Entregue com atraso';
+    if(status.indexOf('entregue') !== -1) return 'Entregue';
+    if(status.indexOf('aguard') !== -1) return 'Aguardando retorno';
+    if(status.indexOf('progres') !== -1) return 'Em progresso';
+    return 'Não iniciado';
+  }
+  function normalizeRisco(value){
+    var risco = String(value || '').trim().toLowerCase();
+    if(!risco) return 'Nenhum';
+    if(risco.indexOf('crit') !== -1) return 'Crítico';
+    if(risco.indexOf('alto') !== -1) return 'Alto';
+    if(risco.indexOf('medio') !== -1 || risco.indexOf('médio') !== -1 || risco.indexOf('med') !== -1) return 'Médio';
+    if(risco.indexOf('baixo') !== -1) return 'Baixo';
+    return 'Nenhum';
   }
   function persistUpdateHistoryToExcel(){
     if(!updates || !updates.length){ return; }
@@ -1218,7 +1280,81 @@
   }
 
   function importBackup(file){
-    // função mantida apenas para compatibilidade interna; não é usada na interface atual.
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(e){
+      var text = e.target.result || '';
+      var rows = parseCsv(text);
+      if(rows.length < 2){ showToast('A planilha não possui conteúdo suficiente para importar.'); return; }
+
+      var headers = rows[0].map(normalizeHeader);
+      var imported = 0;
+
+      rows.slice(1).forEach(function(row){
+        if(!row.some(function(cell){ return (cell || '').trim() !== ''; })) return;
+
+        var record = {};
+        headers.forEach(function(header, index){
+          record[header] = row[index] || '';
+        });
+
+        var nome = [record.nomedademanda, record.demanda, record.atividade, record.nome, record.titulo, record.título]
+          .find(function(value){ return value && String(value).trim(); });
+        if(!nome) return;
+
+        var nomeTexto = String(nome).trim();
+        var existing = demandas.some(function(d){ return d.nome.trim().toLowerCase() === nomeTexto.toLowerCase(); });
+        if(existing) return;
+
+        var descricao = [record.descricao, record.descrio, record.observacoes, record.observao, record.detalhes]
+          .find(function(value){ return value && String(value).trim(); });
+        var solicitante = [record.solicitante, record.pessoaquesolicitou, record.pessoaqsolicitou, record.responsavel]
+          .find(function(value){ return value && String(value).trim(); });
+        var dataEntrada = [record.dataentrada, record.datadeentrada, record.entrada, record.createdat]
+          .find(function(value){ return value && String(value).trim(); });
+        var prazoOriginal = [record.prazooriginal, record.prazoestipulado, record.prazo, record.dataprazo]
+          .find(function(value){ return value && String(value).trim(); });
+        var prazoAtualizado = [record.prazoatualizado, record.prazoatual]
+          .find(function(value){ return value && String(value).trim(); });
+        var nivelRisco = [record.nivelderisco, record.risco, record.nivelrisco]
+          .find(function(value){ return value && String(value).trim(); });
+        var descricaoRisco = [record.descriaodorisco, record.descriorisco, record.motivorisco]
+          .find(function(value){ return value && String(value).trim(); });
+        var status = [record.status, record.situacao, record.situao]
+          .find(function(value){ return value && String(value).trim(); });
+
+        var payload = {
+          id: nextId(),
+          nome: nomeTexto,
+          descricao: descricao ? String(descricao).trim() : '',
+          solicitante: solicitante ? String(solicitante).trim() : '',
+          dataEntrada: dataEntrada ? String(dataEntrada).trim() : todayISO(),
+          prazoOriginal: prazoOriginal ? String(prazoOriginal).trim() : addDays(todayISO(), 7),
+          prazoAtualizado: prazoAtualizado ? String(prazoAtualizado).trim() : '',
+          nivelRisco: normalizeRisco(nivelRisco),
+          descricaoRisco: descricaoRisco ? String(descricaoRisco).trim() : '',
+          status: normalizeStatus(status),
+          ultimaAtualizacao: todayISO()
+        };
+
+        if(payload.prazoAtualizado && payload.prazoAtualizado.indexOf('/') !== -1){
+          payload.prazoAtualizado = payload.prazoAtualizado;
+        }
+
+        demandas.push(payload);
+        imported++;
+      });
+
+      if(imported){
+        saveAll();
+        renderAll();
+        showToast(imported+' demanda(s) importadas da planilha.');
+      } else {
+        showToast('Nenhuma nova demanda foi importada.');
+      }
+    };
+    reader.onerror = function(){ showToast('Não foi possível ler a planilha.'); };
+    reader.readAsText(file, 'utf-8');
   }
 
   /* ============================================================
@@ -1254,6 +1390,12 @@
   ============================================================ */
   function attachEvents(){
     document.getElementById('btnNova').addEventListener('click', function(){ openModal(null); });
+    document.getElementById('btnImportData').addEventListener('click', function(){ document.getElementById('importFile').click(); });
+    document.getElementById('importFile').addEventListener('change', function(e){
+      var file = e.target.files && e.target.files[0];
+      if(file){ importBackup(file); }
+      e.target.value = '';
+    });
     document.getElementById('modalClose').addEventListener('click', closeModal);
     document.getElementById('modalCancel').addEventListener('click', closeModal);
     document.getElementById('modalSave').addEventListener('click', saveDemandaFromForm);
