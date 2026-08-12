@@ -211,9 +211,8 @@
   .badge-nao-iniciado{background:var(--neutral-bg);color:var(--neutral);}
   .badge-em-progresso{background:var(--accent-light);color:var(--accent);}
   .badge-aguardando-retorno{background:var(--warning-bg);color:var(--warning);}  
-  .badge-concluido{background:var(--success-bg);color:var(--success);}
-  .badge-cancelado{background:#f1f1f3;color:#8a8f98;text-decoration:line-through;}
-
+  .badge-entregue{background:var(--info-bg);color:var(--info);}
+  .badge-entregue-atraso{background:var(--warning-bg);color:var(--warning);}
   .badge-risco-nenhum{background:var(--neutral-bg);color:var(--neutral);}
   .badge-risco-baixo{background:var(--success-bg);color:var(--success);}
   .badge-risco-medio{background:var(--warning-bg);color:var(--warning);}
@@ -422,9 +421,9 @@
     </div>
   </div>
   <div class="topbar-actions">
-    <button type="button" class="btn btn-light" id="btnImportData" title="Importar uma planilha Excel ou CSV para o painel">📂 Importar planilha</button>
-    <button type="button" class="btn btn-light" id="btnSaveData" title="Salvar todas as alterações na planilha mestre">💾 Salvar alterações</button>
-    <button type="button" class="btn btn-danger-outline" id="btnClearData" title="Limpar todos os dados e reiniciar o painel">🧹 Limpar dados</button>
+    <button type="button" class="btn btn-light" id="btnImportData" title="Importar uma planilha Excel para o painel">📂 Importar planilha</button>
+    <button type="button" class="btn btn-light" id="btnSaveData" title="Salvar todas as informações na planilha matriz">💾 Salvar informações</button>
+    <button type="button" class="btn btn-danger-outline" id="btnClearData" title="Limpar a sessão da aplicação">🧹 Limpar sessão</button>
     <button type="button" class="btn btn-primary" id="btnNova">+ Nova demanda</button>
   </div>
 </header>
@@ -695,7 +694,8 @@
     demandas: 'esteira_demandas_v1',
     updates: 'esteira_updates_v1',
     seq: 'esteira_seq_v1',
-    importMeta: 'esteira_import_meta_v1'
+    masterFile: 'esteira_master_file_v1',
+    masterHandle: 'esteira_master_handle_v1'
   };
 
   var STATUS_OPTIONS = ['Não iniciado','Em progresso','Aguardando retorno','Entregue','Entregue com atraso','Concluído','Cancelado'];
@@ -739,8 +739,8 @@
   var sortField = 'prazoAtualizado';
   var sortDir = 'asc';
   var editingId = null;
-  var activeMasterFileName = '';
-  var currentMasterFileHandle = null;
+  var masterFileName = '';
+  var masterFileHandle = null;
 
   /* ============================================================
      UTILITÁRIOS DE DATA
@@ -779,24 +779,78 @@
   }
 
   /* ============================================================
-     PERSISTÊNCIA (LocalStorage)
+     UTILITÁRIOS DE NORMALIZAÇÃO
+  ============================================================ */
+  function normalizeStatus(status){
+    if(!status) return 'Não iniciado';
+    var s = String(status).trim();
+    for(var i = 0; i < STATUS_OPTIONS.length; i++){
+      if(STATUS_OPTIONS[i].toLowerCase() === s.toLowerCase()) return STATUS_OPTIONS[i];
+    }
+    return s;
+  }
+  function normalizeRisco(risco){
+    if(!risco) return 'Nenhum';
+    var r = String(risco).trim();
+    for(var i = 0; i < RISCO_OPTIONS.length; i++){
+      if(RISCO_OPTIONS[i].toLowerCase() === r.toLowerCase()) return RISCO_OPTIONS[i];
+    }
+    return r;
+  }
+  function normalizeHeader(header){
+    if(!header) return '';
+    return String(header).trim().toLowerCase().replace(/\s+/g,'');
+  }
+  function parseCsv(csvText){
+    var lines = csvText.split('\n');
+    var headers = [];
+    var rows = [];
+    for(var i = 0; i < lines.length; i++){
+      var line = lines[i].trim();
+      if(!line) continue;
+      var cells = [];
+      var cell = '';
+      var inQuote = false;
+      for(var j = 0; j < line.length; j++){
+        var c = line[j];
+        if(c === '"'){
+          if(inQuote && line[j+1] === '"'){ cell += '"'; j++; }
+          else { inQuote = !inQuote; }
+        } else if(c === ',' && !inQuote){
+          cells.push(cell.trim());
+          cell = '';
+        } else {
+          cell += c;
+        }
+      }
+      cells.push(cell.trim());
+      if(i === 0){
+        headers = cells.map(normalizeHeader);
+      } else {
+        rows.push(cells);
+      }
+    }
+    return rows;
+  }
+
+  /* ============================================================
+     PERSISTÊNCIA (LocalStorage + Excel)
   ============================================================ */
   function cacheCurrentState(){
     localStorage.setItem(STORAGE_KEYS.demandas, JSON.stringify(demandas));
     localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify(updates));
-    localStorage.setItem(STORAGE_KEYS.seq, String(parseInt(localStorage.getItem(STORAGE_KEYS.seq) || '0', 10)));
+    var seqNumber = 0;
+    demandas.forEach(function(d){
+      var match = (d.id || '').match(/DEM-(\d+)/);
+      if(match){ seqNumber = Math.max(seqNumber, parseInt(match[1], 10)); }
+    });
+    localStorage.setItem(STORAGE_KEYS.seq, String(seqNumber));
   }
-  function getMasterWorkbookFileName(){
-    var stamp = todayISO();
-    var baseName = activeMasterFileName ? activeMasterFileName.replace(/\.[^.]+$/, '') : 'demandas';
-    baseName = String(baseName || 'demandas').replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-    if(!baseName){ baseName = 'demandas'; }
-    if(baseName.toLowerCase().indexOf('demandas') === -1){ baseName = 'demandas_' + baseName; }
-    return baseName + '_' + stamp + '.xls';
-  }
+  
   function buildWorkbookFromState(){
     if(!window.XLSX){ throw new Error('SheetJS não disponível'); }
     var workbook = window.XLSX.utils.book_new();
+    
     var demandasSheet = window.XLSX.utils.json_to_sheet(demandas.map(function(d){
       return {
         id: d.id || '',
@@ -812,11 +866,12 @@
         ultimaAtualizacao: d.ultimaAtualizacao || ''
       };
     }));
-    var updatesSheet = window.XLSX.utils.json_to_sheet(updates.map(function(u){
+    
+    var updatesList = updates.map(function(u){
       return {
         id: u.id || '',
-        data: u.data || '',
         demandaId: u.demandaId || '',
+        data: u.data || '',
         comentario: u.comentario || '',
         proximoPasso: u.proximoPasso || '',
         bloqueios: u.bloqueios || '',
@@ -825,67 +880,88 @@
         statusAnterior: u.statusAnterior || '',
         statusNovo: u.statusNovo || ''
       };
-    }));
+    });
+    var updatesSheet = window.XLSX.utils.json_to_sheet(updatesList);
+    
     window.XLSX.utils.book_append_sheet(workbook, demandasSheet, 'Demandas');
-    window.XLSX.utils.book_append_sheet(workbook, updatesSheet, 'Atualizacoes');
+    window.XLSX.utils.book_append_sheet(workbook, updatesSheet, 'Historico');
     return workbook;
   }
+  
   async function persistCurrentStateToMasterWorkbook(){
     if(!window.XLSX){
       showToast('A biblioteca Excel não está disponível no navegador.');
       return false;
     }
-    try{
+    
+    try {
       var workbook = buildWorkbookFromState();
-      var outputFileName = getMasterWorkbookFileName();
-      if(currentMasterFileHandle && typeof currentMasterFileHandle.createWritable === 'function'){
-        if(typeof currentMasterFileHandle.move === 'function' && currentMasterFileHandle.name !== outputFileName){
-          currentMasterFileHandle = await currentMasterFileHandle.move(outputFileName);
+      
+      // Se temos um handle do arquivo, usar a File System Access API
+      if(masterFileHandle && typeof masterFileHandle.createWritable === 'function'){
+        try {
+          var writable = await masterFileHandle.createWritable();
+          var bytes = window.XLSX.write(workbook, {bookType:'xlsx', type:'array'});
+          await writable.write(bytes);
+          await writable.close();
+          localStorage.setItem(STORAGE_KEYS.masterFile, masterFileName);
+          return true;
+        } catch(apiErr) {
+          console.error('Erro ao usar File System Access API:', apiErr);
         }
-        var writable = await currentMasterFileHandle.createWritable();
-        var bytes = window.XLSX.write(workbook, {bookType:'xls', type:'array'});
-        await writable.write(bytes);
-        await writable.close();
-        activeMasterFileName = currentMasterFileHandle.name;
-      } else {
-        window.XLSX.writeFile(workbook, outputFileName, {bookType:'xls'});
-        activeMasterFileName = outputFileName;
       }
-      localStorage.setItem(STORAGE_KEYS.importMeta, JSON.stringify({fileName: activeMasterFileName, savedAt: todayISO()}));
+      
+      // Fallback: download do arquivo
+      if(!masterFileName){
+        masterFileName = 'Planilha_Matriz.xlsx';
+      }
+      window.XLSX.writeFile(workbook, masterFileName, {bookType:'xlsx'});
+      localStorage.setItem(STORAGE_KEYS.masterFile, masterFileName);
       return true;
-    }catch(err){
-      console.error(err);
-      showToast('Não foi possível salvar na planilha mestre.');
+      
+    } catch(err) {
+      console.error('Erro ao persistir estado:', err);
+      showToast('Não foi possível salvar na planilha matriz.');
       return false;
     }
   }
+  
   async function saveAll(){
     cacheCurrentState();
     var ok = await persistCurrentStateToMasterWorkbook();
     if(ok){
-      showToast('Alterações salvas na planilha mestre.');
+      if(masterFileHandle){
+        showToast('Informações salvas na planilha matriz.');
+      } else {
+        showToast('Informações salvas como Planilha_Matriz.xlsx. Importe esse arquivo no próximo uso.');
+      }
     }
   }
-  function clearAllData(){
+  
+  function clearSessionData(){
     demandas = [];
     updates = [];
-    activeMasterFileName = '';
-    currentMasterFileHandle = null;
+    masterFileName = '';
+    masterFileHandle = null;
     localStorage.removeItem(STORAGE_KEYS.demandas);
     localStorage.removeItem(STORAGE_KEYS.updates);
-    localStorage.removeItem(STORAGE_KEYS.importMeta);
+    localStorage.removeItem(STORAGE_KEYS.masterFile);
+    localStorage.removeItem(STORAGE_KEYS.seq);
     localStorage.setItem(STORAGE_KEYS.seq, '0');
     renderAll();
-    showToast('Todos os dados foram limpos.');
+    showToast('Sessão limpa. Importe uma planilha matriz ou cadastre novas demandas.');
   }
+  
   function nextId(){
-    var n = parseInt(localStorage.getItem(STORAGE_KEYS.seq) || '0', 10) + 1;
-    localStorage.setItem(STORAGE_KEYS.seq, String(n));
-    return 'DEM-' + String(n).padStart(3,'0');
+    var seqNumber = parseInt(localStorage.getItem(STORAGE_KEYS.seq) || '0', 10) + 1;
+    localStorage.setItem(STORAGE_KEYS.seq, String(seqNumber));
+    return 'DEM-' + String(seqNumber).padStart(3,'0');
   }
+  
   function nextUpdateId(){
     return 'UPD-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1000);
   }
+  
   function normalizeUpdateRecord(update){
     if(!update || typeof update !== 'object') return update;
     return Object.assign({
@@ -901,70 +977,50 @@
       statusNovo: update.statusNovo || ''
     }, update);
   }
+  
   function normalizeImportedDate(value){
-    if(!value && value !== 0) return '';
+    if(value === null || value === undefined || value === '') return '';
     if(value instanceof Date) return isoFromDate(value);
     if(typeof value === 'number'){
+      // Converte número do Excel (dias desde 1900-01-01) para data
       var date = new Date((value - 25569) * 86400 * 1000);
       return isoFromDate(date);
     }
     var text = String(value).trim();
     if(!text) return '';
+    // Já é ISO (YYYY-MM-DD)?
     if(/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0,10);
+    // ISO com hora?
     if(/^\d{4}\/\d{2}\/\d{2}/.test(text)) return text.replace(/\//g,'-').slice(0,10);
+    // Formato BR (DD/MM/YYYY)?
     if(/^\d{2}\/\d{2}\/\d{4}/.test(text)){
       var parts = text.split('/');
-      return parts[2]+'-'+parts[1]+'-'+parts[0];
+      return parts[2]+'-'+parts[1].padStart(2,'0')+'-'+parts[0].padStart(2,'0');
     }
-    return text;
+    return text.slice(0,10);
   }
+  
   function getImportValue(record, keys){
+    if(!record) return '';
     for(var i = 0; i < keys.length; i++){
       var key = keys[i];
       var value = record[key];
-      if(value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
+      if(value !== undefined && value !== null && String(value).trim() !== '') {
+        return String(value).trim();
+      }
     }
     return '';
   }
-  function applyImportedFields(existingDemand, record){
-    var nomeTexto = getImportValue(record, ['nomedademanda','demanda','atividade','nome','titulo','título']);
-    if(nomeTexto){ existingDemand.nome = nomeTexto; }
-
-    var descricao = getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']);
-    if(descricao){ existingDemand.descricao = descricao; }
-
-    var solicitante = getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']);
-    if(solicitante){ existingDemand.solicitante = solicitante; }
-
-    var dataEntrada = normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat']));
-    if(dataEntrada){ existingDemand.dataEntrada = dataEntrada; }
-
-    var prazoOriginal = normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo']));
-    if(prazoOriginal){ existingDemand.prazoOriginal = prazoOriginal; }
-
-    var prazoAtualizado = normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual']));
-    if(prazoAtualizado){ existingDemand.prazoAtualizado = prazoAtualizado; }
-
-    var nivelRisco = getImportValue(record, ['nivelderisco','risco','nivelrisco']);
-    if(nivelRisco){ existingDemand.nivelRisco = normalizeRisco(nivelRisco); }
-
-    var descricaoRisco = getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']);
-    if(descricaoRisco){ existingDemand.descricaoRisco = descricaoRisco; }
-
-    var status = getImportValue(record, ['status','situacao','situao']);
-    if(status){ existingDemand.status = normalizeStatus(status); }
-
-    existingDemand.ultimaAtualizacao = todayISO();
-  }
+  
   function loadAll(){
     var storedDemandas = localStorage.getItem(STORAGE_KEYS.demandas);
     var storedUpdates = localStorage.getItem(STORAGE_KEYS.updates);
     if(storedDemandas || storedUpdates){
-      try{
+      try {
         if(storedDemandas){ demandas = JSON.parse(storedDemandas) || []; }
         if(storedUpdates){ updates = (JSON.parse(storedUpdates) || []).map(normalizeUpdateRecord); }
         return;
-      }catch(e){
+      } catch(e) {
         console.warn('Falha ao ler dados salvos, iniciando painel vazio.', e);
       }
     }
@@ -975,13 +1031,6 @@
     localStorage.setItem(STORAGE_KEYS.updates, JSON.stringify([]));
   }
 
-  /* ============================================================
-     DADOS INICIAIS
-  ============================================================ */
-  function seedSampleData(){
-    demandas = [];
-    updates = [];
-  }
 
   /* ============================================================
      CLASSIFICAÇÕES DE NEGÓCIO
@@ -1330,93 +1379,115 @@
     var isExcel = /\.xlsx?$/i.test(file.name);
 
     reader.onload = function(e){
-      var rows = [];
       var importedDemandas = [];
       var importedUpdates = [];
-      try{
+      try {
         if(isExcel){
           if(!window.XLSX){ throw new Error('XLSX not loaded'); }
           var data = new Uint8Array(e.target.result);
           var workbook = window.XLSX.read(data, {type:'array'});
-          var demandSheet = workbook.Sheets.Demandas || workbook.Sheets['Sheet1'] || null;
-          var updatesSheet = workbook.Sheets.Atualizacoes || null;
-          if(demandSheet){
-            rows = window.XLSX.utils.sheet_to_json(demandSheet, {defval:'', raw:false});
-          } else {
-            rows = [];
+          
+          // Tenta ler as abas Demandas e Historico
+          var demandSheet = workbook.Sheets['Demandas'];
+          var historicSheet = workbook.Sheets['Historico'];
+          
+          if(!demandSheet){
+            // Tenta alternativas
+            var sheetNames = workbook.SheetNames || [];
+            if(sheetNames.length > 0) demandSheet = workbook.Sheets[sheetNames[0]];
           }
-          if(updatesSheet){
-            importedUpdates = window.XLSX.utils.sheet_to_json(updatesSheet, {defval:'', raw:false});
+          
+          if(demandSheet){
+            var rows = window.XLSX.utils.sheet_to_json(demandSheet, {defval:'', raw:false});
+            rows.forEach(function(item){
+              var nomeTexto = getImportValue(item, ['nome','nomedademanda','demanda','atividade','titulo','título']);
+              if(!nomeTexto) return;
+              
+              importedDemandas.push({
+                id: item.id || nextId(),
+                nome: String(nomeTexto).trim(),
+                descricao: getImportValue(item, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']) || '',
+                solicitante: getImportValue(item, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']) || '',
+                dataEntrada: normalizeImportedDate(getImportValue(item, ['dataEntrada','dataentrada','datadeentrada','entrada','createdat'])) || todayISO(),
+                prazoOriginal: normalizeImportedDate(getImportValue(item, ['prazoOriginal','prazooriginal','prazoestipulado','prazo','dataprazo'])) || addDays(todayISO(), 7),
+                prazoAtualizado: normalizeImportedDate(getImportValue(item, ['prazoAtualizado','prazoatualizado','prazoatual'])) || '',
+                nivelRisco: normalizeRisco(getImportValue(item, ['nivelRisco','nivelderisco','risco','nivelrisco'])),
+                descricaoRisco: getImportValue(item, ['descricaoRisco','descriaodorisco','descriorisco','motivorisco']) || '',
+                status: normalizeStatus(getImportValue(item, ['status','situacao','situao'])),
+                ultimaAtualizacao: normalizeImportedDate(getImportValue(item, ['ultimaAtualizacao','ultimaatualizacao'])) || todayISO()
+              });
+            });
+          }
+          
+          if(historicSheet){
+            var updatesRows = window.XLSX.utils.sheet_to_json(historicSheet, {defval:'', raw:false});
+            updatesRows.forEach(function(item){
+              importedUpdates.push({
+                id: item.id || nextUpdateId(),
+                demandaId: item.demandaId || item.demandaid || '',
+                data: normalizeImportedDate(getImportValue(item, ['data','date','data'])) || todayISO(),
+                comentario: getImportValue(item, ['comentario','comentário','comment']) || '',
+                proximoPasso: getImportValue(item, ['proximoPasso','proximopasso','proximopasso']) || '',
+                bloqueios: getImportValue(item, ['bloqueios','bloqueios','blockages']) || '',
+                responsavel: getImportValue(item, ['responsavel','responsável','responsible']) || '',
+                tipo: getImportValue(item, ['tipo','type']) || 'andamento',
+                statusAnterior: normalizeStatus(getImportValue(item, ['statusAnterior','statusanterior','previousstatus'])),
+                statusNovo: normalizeStatus(getImportValue(item, ['statusNovo','statusnovo','newstatus']))
+              });
+            });
           }
         } else {
-          rows = parseCsv(e.target.result || '');
+          var rows = parseCsv(e.target.result || '');
+          var headers = rows.length > 0 ? rows[0].map(normalizeHeader) : [];
+          if(rows.length < 2){
+            showToast('A planilha não possui conteúdo suficiente para importar.');
+            return;
+          }
+          rows.slice(1).forEach(function(row){
+            if(!row.some(function(cell){ return (cell || '').toString().trim() !== ''; })) return;
+            var record = {};
+            headers.forEach(function(header, index){
+              record[header] = row[index] || '';
+            });
+            var nomeTexto = getImportValue(record, ['nome','nomedademanda','demanda','atividade','titulo','título']);
+            if(!nomeTexto) return;
+            
+            importedDemandas.push({
+              id: nextId(),
+              nome: String(nomeTexto).trim(),
+              descricao: getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']) || '',
+              solicitante: getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']) || '',
+              dataEntrada: normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat'])) || todayISO(),
+              prazoOriginal: normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo'])) || addDays(todayISO(), 7),
+              prazoAtualizado: normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual'])) || '',
+              nivelRisco: normalizeRisco(getImportValue(record, ['nivelderisco','risco','nivelrisco'])),
+              descricaoRisco: getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']) || '',
+              status: normalizeStatus(getImportValue(record, ['status','situacao','situao'])),
+              ultimaAtualizacao: todayISO()
+            });
+          });
         }
-      }catch(err){
+      } catch(err) {
+        console.error('Erro ao importar:', err);
         showToast('Não foi possível ler a planilha selecionada.');
         return;
-      }
-
-      if(isExcel){
-        rows.forEach(function(item){
-          var nomeTexto = getImportValue(item, ['nome','nomedademanda','demanda','atividade','titulo','título']);
-          if(!nomeTexto) return;
-          importedDemandas.push({
-            id: item.id || nextId(),
-            nome: String(nomeTexto).trim(),
-            descricao: getImportValue(item, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']) || '',
-            solicitante: getImportValue(item, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']) || '',
-            dataEntrada: normalizeImportedDate(getImportValue(item, ['dataEntrada','dataentrada','datadeentrada','entrada','createdat'])) || todayISO(),
-            prazoOriginal: normalizeImportedDate(getImportValue(item, ['prazoOriginal','prazooriginal','prazoestipulado','prazo','dataprazo'])) || addDays(todayISO(), 7),
-            prazoAtualizado: normalizeImportedDate(getImportValue(item, ['prazoAtualizado','prazoatualizado','prazoatual'])) || '',
-            nivelRisco: normalizeRisco(getImportValue(item, ['nivelRisco','nivelderisco','risco','nivelrisco'])),
-            descricaoRisco: getImportValue(item, ['descricaoRisco','descriaodorisco','descriorisco','motivorisco']) || '',
-            status: normalizeStatus(getImportValue(item, ['status','situacao','situao'])),
-            ultimaAtualizacao: normalizeImportedDate(getImportValue(item, ['ultimaAtualizacao','ultimaatualizacao'])) || todayISO()
-          });
-        });
-      } else {
-        var headers = rows[0] ? rows[0].map(normalizeHeader) : [];
-        if(rows.length < 2){
-          showToast('A planilha não possui conteúdo suficiente para importar.');
-          return;
-        }
-        rows.slice(1).forEach(function(row){
-          if(!row.some(function(cell){ return (cell || '').toString().trim() !== ''; })) return;
-          var record = {};
-          headers.forEach(function(header, index){
-            record[header] = row[index] || '';
-          });
-          var nomeTexto = getImportValue(record, ['nomedademanda','demanda','atividade','nome','titulo','título']);
-          if(!nomeTexto) return;
-          importedDemandas.push({
-            id: nextId(),
-            nome: String(nomeTexto).trim(),
-            descricao: getImportValue(record, ['descricao','descrição','descrio','observacoes','observação','observacao','detalhes']) || '',
-            solicitante: getImportValue(record, ['solicitante','pessoaquesolicitou','pessoaqsolicitou','responsavel']) || '',
-            dataEntrada: normalizeImportedDate(getImportValue(record, ['dataentrada','datadeentrada','entrada','createdat'])) || todayISO(),
-            prazoOriginal: normalizeImportedDate(getImportValue(record, ['prazooriginal','prazoestipulado','prazo','dataprazo'])) || addDays(todayISO(), 7),
-            prazoAtualizado: normalizeImportedDate(getImportValue(record, ['prazoatualizado','prazoatual'])) || '',
-            nivelRisco: normalizeRisco(getImportValue(record, ['nivelderisco','risco','nivelrisco'])),
-            descricaoRisco: getImportValue(record, ['descriaodorisco','descriorisco','motivorisco']) || '',
-            status: normalizeStatus(getImportValue(record, ['status','situacao','situao'])),
-            ultimaAtualizacao: todayISO()
-          });
-        });
       }
 
       if(importedDemandas.length){
         demandas = importedDemandas;
         updates = importedUpdates.map(normalizeUpdateRecord);
-        activeMasterFileName = file.name;
-        currentMasterFileHandle = null;
+        masterFileName = file.name;
+        masterFileHandle = null;
         cacheCurrentState();
         renderAll();
-        showToast(importedDemandas.length+' demanda(s) carregadas da planilha.');
+        showToast('Planilha matriz carregada com sucesso. '+importedDemandas.length+' demanda(s) importada(s).');
       } else {
-        showToast('Nenhuma demanda foi importada.');
+        showToast('Nenhuma demanda foi encontrada na planilha.');
       }
     };
+    
     reader.onerror = function(){ showToast('Não foi possível ler a planilha.'); };
+    
     if(isExcel){
       reader.readAsArrayBuffer(file);
     } else {
@@ -1457,9 +1528,10 @@
   ============================================================ */
   function attachEvents(){
     document.getElementById('btnNova').addEventListener('click', function(){ openModal(null); });
+    
     document.getElementById('btnImportData').addEventListener('click', async function(){
       if(window.showOpenFilePicker){
-        try{
+        try {
           var handles = await window.showOpenFilePicker({
             multiple: false,
             types: [{
@@ -1472,28 +1544,31 @@
             }]
           });
           if(handles && handles[0]){
-            currentMasterFileHandle = handles[0];
-            var selectedFile = await currentMasterFileHandle.getFile();
+            masterFileHandle = handles[0];
+            var selectedFile = await masterFileHandle.getFile();
             importBackup(selectedFile);
           }
-        }catch(err){
+        } catch(err) {
           console.info('Seleção cancelada', err);
         }
       } else {
         document.getElementById('importFile').click();
       }
     });
+    
     document.getElementById('importFile').addEventListener('change', function(e){
       var file = e.target.files && e.target.files[0];
       if(file){ importBackup(file); }
       e.target.value = '';
     });
+    
     document.getElementById('modalClose').addEventListener('click', closeModal);
     document.getElementById('modalCancel').addEventListener('click', closeModal);
     document.getElementById('modalSave').addEventListener('click', saveDemandaFromForm);
     document.getElementById('modalOverlay').addEventListener('click', function(e){
       if(e.target === this) closeModal();
     });
+    
     document.addEventListener('keydown', function(e){
       if(e.key==='Escape' && !document.getElementById('modalOverlay').classList.contains('hidden')) closeModal();
     });
@@ -1508,9 +1583,10 @@
     document.getElementById('btnSaveData').addEventListener('click', function(){
       saveAll();
     });
+    
     document.getElementById('btnClearData').addEventListener('click', function(){
-      if(window.confirm('Deseja realmente limpar todos os dados salvos e reiniciar o painel?')){
-        clearAllData();
+      if(window.confirm('Deseja limpar a sessão? Você precisará importar a planilha matriz novamente na próxima vez. Nenhum arquivo será deletado.')){
+        clearSessionData();
       }
     });
   }
